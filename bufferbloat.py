@@ -56,6 +56,11 @@ parser.add_argument('--maxq',
                     help="Max buffer size of network interface in packets",
                     default=100)
 
+parser.add_argument('--hosts', '-ho',
+                    type=int,
+                    help="Number of hosts as non-servers",
+                    default=4)
+
 # Linux uses CUBIC-TCP by default that doesn't have the usual sawtooth
 # behaviour.  For those who are curious, invoke this script with
 # --cong cubic and see what happens...
@@ -73,12 +78,13 @@ class BBTopo(Topo):
     def build(self, n=2):
         # Here are two hosts
         hosts = []
-        for i in range(1,n+1):
+        for i in range(1,5):
             hosts.append(self.addHost('h%d'%(i)))
 
         # Here I have created a switch.  If you change its name, its
         # interface names will change from s0-eth1 to newname-eth1.
         switch = self.addSwitch('s0')
+        switch2 = self.addSwitch('s1')
 
         # TODO: Add links with appropriate characteristics
         for i in range(0, n):
@@ -88,6 +94,18 @@ class BBTopo(Topo):
             else:
                 self.addLink(hosts[i], switch, bw=args.bw_net, delay=args.delay,
                              max_queue_size=args.maxq)
+        self.addLink(hosts[2], switch2, bw=args.bw_host, delay=args.delay,
+                    max_queue_size=args.maxq)
+        self.addLink(hosts[3], switch2, bw=args.bw_host, delay=args.delay,
+                    max_queue_size=args.maxq)
+        bottleneck = self.addLink(switch, switch2, bw=args.bw_host, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        sleep(2)
+
+        self.delLink(bottleneck)
+        
+
         return
 
 # Simple wrappers around monitoring utilities.  You are welcome to
@@ -96,6 +114,35 @@ class BBTopo(Topo):
 
 # tcp_probe is a kernel module which records cwnd over time. In linux >= 4.16
 # it has been replaced by the tcp:tcp_probe kernel tracepoint.
+
+class DBTopo(Topo):
+    "Dumbell topology for qbuffer experiment"
+
+    def build(self, n=args.hosts):
+        hosts = []
+        for i in range(1,n+1):
+            hosts.append(self.addHost('h%d'%(i)))
+
+        switches = []
+        switches.append(self.addSwitch('s0'))
+        switches.append(self.addSwitch('s1'))
+
+        self.addLink(hosts[1], switches[0], bw=args.bw_net, delay=args.delay,
+                        max_queue_size=args.maxq)
+            
+        self.addLink(hosts[0], switches[1], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        self.addLink(hosts[2], switches[0], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        self.addLink(hosts[3], switches[1], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        self.addLink(switches[0], switches[1], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        return
+
 def start_tcpprobe(outfile="cwnd.txt"):
     os.system("rmmod tcp_probe; modprobe tcp_probe full=1;")
     Popen("cat /proc/net/tcpprobe > %s/%s" % (args.dir, outfile),
@@ -104,7 +151,7 @@ def start_tcpprobe(outfile="cwnd.txt"):
 def stop_tcpprobe():
     Popen("killall -9 cat", shell=True).wait()
 
-def start_qmon(iface, interval_sec=0.1, outfile="q.txt"):
+def start_qmon(iface, interval_sec, outfile):
     monitor = Process(target=monitor_qlen,
                       args=(iface, interval_sec, outfile))
     monitor.start()
@@ -112,7 +159,7 @@ def start_qmon(iface, interval_sec=0.1, outfile="q.txt"):
 
 def start_iperf(net):
     h2 = net.get('h2')
-    print "Starting iperf server..."
+    print ("Starting iperf server...")
     # For those who are curious about the -w 16m parameter, it ensures
     # that the TCP flow is not receiver window limited.  If it is,
     # there is a chance that the router buffer may not get filled up.
@@ -153,7 +200,7 @@ def bufferbloat():
     cleanup()
 
     topo = BBTopo()
-    net = Mininet(topo=topo, host=CPULimitedHost, link=TCLink)
+    net = Mininet(topo=topo, link=TCLink) #, host=CPULimitedHost, link=TCLink
     net.start()
     # This dumps the topology and how nodes are interconnected through
     # links.
@@ -162,7 +209,7 @@ def bufferbloat():
     net.pingAll()
 
     # Start all the monitoring processes
-    start_tcpprobe("cwnd.txt")
+    #start_tcpprobe("cwnd.txt")
     start_ping(net)
 
     # TODO: Start monitoring the queue sizes.  Since the switch I
@@ -171,7 +218,7 @@ def bufferbloat():
     # Depending on the order you add links to your network, this
     # number may be 1 or 2.  Ensure you use the correct number.
     #
-    qmon = start_qmon(iface='s0-eth2',
+    qmon = start_qmon(iface='s0-eth2', interval_sec=0.01,
                         outfile='%s/q.txt' % (args.dir))
 
     # TODO: Start iperf, webservers, etc.
@@ -199,7 +246,7 @@ def bufferbloat():
         delta = now - start_time
         if delta > args.time:
             break
-        print "%.1fs left..." % (args.time - delta)
+        print ("%.1fs left..." % (args.time - delta))
 
         h1 = net.get('h1')
         h2 = net.get('h2')
@@ -213,10 +260,9 @@ def bufferbloat():
     # times.  You don't need to plot them.  Just note it in your
     # README and explain.
     with open('%s/avgsd.txt'%(args.dir), 'w') as f:
-        f.write("Average: %lf\nStandard Deviation: %lf\n" %
-                (avg(time_measures), stdev(time_measures)))
+        f.write(str(time_measures))
 
-    stop_tcpprobe()
+    #stop_tcpprobe()
     if qmon is not None:
         qmon.terminate()
     net.stop()

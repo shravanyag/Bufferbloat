@@ -72,7 +72,7 @@ def stdev(lst):
 
 def xaxis(values, limit):
     l = len(values)
-    return zip(*map(lambda (x,y): (x*1.0*limit/l, y), enumerate(values)))
+    return zip(*map(lambda x,y: (x*1.0*limit/l, y), enumerate(values)))
 
 def grouper(n, iterable, fillvalue=None):
     "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
@@ -108,7 +108,7 @@ def parse_cpu_usage(fname, nprocessors=8):
           usages = cpu.split(':')[1]
           usages = map(lambda e: e.split('%')[0],
                        usages.split(','))
-          for i in xrange(len(usages)):
+          for i in range(len(usages)):
               total[i] += float(usages[i])
         total = map(lambda t: t/nprocessors, total)
 		# Skip idle time

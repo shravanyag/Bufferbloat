@@ -4,22 +4,26 @@ import re
 
 default_dir = '.'
 
-def monitor_qlen(iface, interval_sec = 0.01, fname='%s/qlen.txt' % default_dir):
+def monitor_qlen(iface, interval_sec, fname):
     pat_queued = re.compile(r'backlog\s[^\s]+\s([\d]+)p')
+    #print(pat_queued)
     cmd = "tc -s qdisc show dev %s" % (iface)
+    #print(cmd)
     ret = []
     open(fname, 'w').write('')
     while 1:
         p = Popen(cmd, shell=True, stdout=PIPE)
         output = p.stdout.read()
+        print("output = ", output)
         # Not quite right, but will do for now
-        matches = pat_queued.findall(output)
-        if matches and len(matches) > 1:
-            ret.append(matches[1])
+        matches = pat_queued.findall(str(output))
+        #print("matches = ", matches)
+        if matches:
+            ret.append(matches[0])
             t = "%f" % time()
-            open(fname, 'a').write(t + ',' + matches[1] + '\n')
+            open(fname, 'a').write(t + ',' + matches[0] + '\n')
         sleep(interval_sec)
-    #open('qlen.txt', 'w').write('\n'.join(ret))
+    #open('./output/q.txt', 'w').write('\n'.join(ret))
     return
 
 def monitor_devs_ng(fname="%s/txrate.txt" % default_dir, interval_sec=0.01):
