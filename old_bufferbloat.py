@@ -26,7 +26,11 @@ import math
 # one of the goals of this assignment is for you to learn how to use
 # Mininet. :-)
 
-parser = ArgumentParser(description="Queue buffer size tests")
+parser = ArgumentParser(description="Bufferbloat tests")
+parser.add_argument('--bw-host', '-B',
+                    type=float,
+                    help="Bandwidth of host links (Mb/s)",
+                    default=1000)
 
 parser.add_argument('--bw-net', '-b',
                     type=float,
@@ -52,6 +56,11 @@ parser.add_argument('--maxq',
                     help="Max buffer size of network interface in packets",
                     default=100)
 
+parser.add_argument('--hosts', '-ho',
+                    type=int,
+                    help="Number of hosts as non-servers",
+                    default=4)
+
 # Linux uses CUBIC-TCP by default that doesn't have the usual sawtooth
 # behaviour.  For those who are curious, invoke this script with
 # --cong cubic and see what happens...
@@ -63,35 +72,76 @@ parser.add_argument('--cong',
 # Expt parameters
 args = parser.parse_args()
 
-class MultiServerTopo(Topo):
-    "Dumbell topology with 1 subnet representing the host and the other server."
+class BBTopo(Topo):
+    "Simple topology for bufferbloat experiment."
 
-    def build(self):
+    def build(self, n=2):
+        # Here are two hosts
         hosts = []
-        switches = []
         for i in range(1,5):
             hosts.append(self.addHost('h%d'%(i)))
 
-        for i in range(1,5):
-            hosts.append(self.addHost('s%d'%(i)))
+        # Here I have created a switch.  If you change its name, its
+        # interface names will change from s0-eth1 to newname-eth1.
+        switch = self.addSwitch('s0')
+        switch2 = self.addSwitch('s1')
 
-        switch1 = self.addSwitch('r1')
-        switch2 = self.addSwitch('r2')
-        #observe r1-eth5
+        # TODO: Add links with appropriate characteristics
+        for i in range(0, n):
+            if i == 0:
+                self.addLink(hosts[i], switch, bw=args.bw_host, delay=args.delay,
+                             max_queue_size=args.maxq)
+            else:
+                self.addLink(hosts[i], switch, bw=args.bw_net, delay=args.delay,
+                             max_queue_size=args.maxq)
+        self.addLink(hosts[2], switch2, bw=args.bw_host, delay=args.delay,
+                    max_queue_size=args.maxq)
+        self.addLink(hosts[3], switch2, bw=args.bw_host, delay=args.delay,
+                    max_queue_size=args.maxq)
+        bottleneck = self.addLink(switch, switch2, bw=args.bw_host, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        #sleep(2)
 
-        for i in range(4):
-            self.addLink(switch1, hosts[i], bw=args.bw_net, delay=args.delay,
-                         max_queue_size=args.maxq)
-            
-        for i in range(4,8):
-            self.addLink(switch2, hosts[i], bw=args.bw_net, delay=args.delay,
-                         max_queue_size=args.maxq)
-            
-        self.addLink(switch1, switch2, bw=args.bw_net, delay=args.delay, 
-                     max_queue_size=args.maxq)
+        #self.addLink(switch, switch2, bw=args.bw_host, delay=args.delay,
+                    #max_queue_size=args.maxq-10)
+
+        return
+
+# Simple wrappers around monitoring utilities.  You are welcome to
+# contribute neatly written (using classes) monitoring scripts for
+# Mininet!
 
 # tcp_probe is a kernel module which records cwnd over time. In linux >= 4.16
 # it has been replaced by the tcp:tcp_probe kernel tracepoint.
+
+class DBTopo(Topo):
+    "Dumbell topology for qbuffer experiment"
+
+    def build(self, n=args.hosts):
+        hosts = []
+        for i in range(1,n+1):
+            hosts.append(self.addHost('h%d'%(i)))
+
+        switches = []
+        switches.append(self.addSwitch('s0'))
+        switches.append(self.addSwitch('s1'))
+
+        self.addLink(hosts[1], switches[0], bw=args.bw_net, delay=args.delay,
+                        max_queue_size=args.maxq)
+            
+        self.addLink(hosts[0], switches[1], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        self.addLink(hosts[2], switches[0], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        self.addLink(hosts[3], switches[1], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        
+        self.addLink(switches[0], switches[1], bw=args.bw_net, delay=args.delay,
+                    max_queue_size=args.maxq)
+        return
 
 def start_tcpprobe(outfile="cwnd.txt"):
     os.system("rmmod tcp_probe; modprobe tcp_probe full=1;")
@@ -108,53 +158,23 @@ def start_qmon(iface, interval_sec, outfile):
     return monitor
 
 def start_iperf(net):
-    s1 = net.get('s1')
-    print ("Starting iperf server on s1...")
-    s1.popen("iperf -s -w 16m")
-
-    s2 = net.get('s2')
-    print ("Starting iperf server on s2...")
-    s2.popen("iperf -s -w 16m")
-
-    s3 = net.get('s3')
-    print ("Starting iperf server on s3...")
-    s3.popen("iperf -s -w 16m")
-
-    s4 = net.get('s4')
-    print ("Starting iperf server on s4...")
-    s4.popen("iperf -s -w 16m")
+    h2 = net.get('h2')
+    print ("Starting iperf server...")
     # For those who are curious about the -w 16m parameter, it ensures
     # that the TCP flow is not receiver window limited.  If it is,
     # there is a chance that the router buffer may not get filled up.
-    
+    server = h2.popen("iperf -s -w 16m")
+
     # TODO: Start the iperf client on h1.  Ensure that you create a
     # long lived TCP flow. You may need to redirect iperf's stdout to avoid blocking.
     h1 = net.get('h1')
-    h1.popen("iperf -c %s -t %s > %s/iperf.out" % (s1.IP(), args.time, args.dir), shell=True)
-
-    h2 = net.get('h2')
-    h2.popen("iperf -c %s -t %s > %s/iperf.out" % (s2.IP(), args.time, args.dir), shell=True)
-
-    h3 = net.get('h3')
-    h3.popen("iperf -c %s -t %s > %s/iperf.out" % (s3.IP(), args.time, args.dir), shell=True)
-
-    h4 = net.get('h4')
-    h4.popen("iperf -c %s -t %s > %s/iperf.out" % (s4.IP(), args.time, args.dir), shell=True)
+    h1.popen("iperf -c %s -t %s > %s/iperf.out" % (h2.IP(), args.time, args.dir), shell=True)
 
 def start_webserver(net):
-    s1 = net.get('s1')
-    proc1 = s1.popen("python http/webserver.py", shell=True)
-
-    s2 = net.get('s2')
-    proc2 = s2.popen("python http/webserver.py", shell=True)
-
-    s3 = net.get('s3')
-    proc3 = s3.popen("python http/webserver.py", shell=True)
-
-    s4 = net.get('s4')
-    proc4 = s4.popen("python http/webserver.py", shell=True)
+    h1 = net.get('h1')
+    proc = h1.popen("python http/webserver.py", shell=True)
     sleep(1)
-    return [proc1, proc2, proc3, proc4]
+    return [proc]
 
 def start_ping(net):
     # TODO: Start a ping train from h1 to h2 (or h2 to h1, does it
@@ -168,8 +188,8 @@ def start_ping(net):
     # until stdout is read. You can avoid this by runnning popen.communicate() or
     # redirecting stdout
     h1 = net.get('h1')
-    s4 = net.get('s4')
-    popen = h1.popen("ping -i 0.1 %s > %s/ping.txt"%(s4.IP(), args.dir), shell=True)
+    h2 = net.get('h2')
+    popen = h1.popen("ping -i 0.1 %s > %s/ping.txt"%(h2.IP(), args.dir), shell=True)
 
 def bufferbloat():
     if not os.path.exists(args.dir):
@@ -179,7 +199,7 @@ def bufferbloat():
     # Cleanup any leftovers from previous mininet runs
     cleanup()
 
-    topo = MultiServerTopo()
+    topo = BBTopo()
     net = Mininet(topo=topo, link=TCLink) #, host=CPULimitedHost, link=TCLink
     net.start()
     # This dumps the topology and how nodes are interconnected through
@@ -198,11 +218,8 @@ def bufferbloat():
     # Depending on the order you add links to your network, this
     # number may be 1 or 2.  Ensure you use the correct number.
     #
-    qmon1 = start_qmon(iface='r1-eth5', interval_sec=0.01,
-                        outfile='%s/q-r1.txt' % (args.dir))
-    
-    qmon2 = start_qmon(iface='r2-eth5', interval_sec=0.01,
-                        outfile='%s/q-r2.txt' % (args.dir))
+    qmon = start_qmon(iface='s0-eth2', interval_sec=0.01,
+                        outfile='%s/q.txt' % (args.dir))
 
     # TODO: Start iperf, webservers, etc.
     start_iperf(net)
@@ -222,10 +239,7 @@ def bufferbloat():
     # Hint: have a separate function to do this and you may find the
     # loop below useful.
     start_time = time()
-    time_measures_h1 = []
-    time_measures_h2 = []
-    time_measures_h3 = []
-    time_measures_h4 = []
+    time_measures = []
     while True:
         # do the measurement (say) 3 times.
         now = time()
@@ -237,33 +251,14 @@ def bufferbloat():
 
         h1 = net.get('h1')
         h2 = net.get('h2')
-        h3 = net.get('h3')
-        h4 = net.get('h4')
-
-        s1 = net.get('s1')
-        s2 = net.get('s2')
-        s3 = net.get('s3')
-        s4 = net.get('s4')
         for i in range(3):
-            webpage_time_h1 = h1.popen('curl -o /dev/null -s -w %%{time_total} %s/http/index.html' %
-                    s1.IP()).communicate()[0]
-            time_measures_h1.append(float(webpage_time_h1))
-
-            webpage_time_h2 = h2.popen('curl -o /dev/null -s -w %%{time_total} %s/http/index.html' %
-                    s2.IP()).communicate()[0]
-            time_measures_h2.append(float(webpage_time_h2))
-
-            webpage_time_h3 = h3.popen('curl -o /dev/null -s -w %%{time_total} %s/http/index.html' %
-                    s3.IP()).communicate()[0]
-            time_measures_h3.append(float(webpage_time_h3))
-
-            webpage_time_h4 = h4.popen('curl -o /dev/null -s -w %%{time_total} %s/http/index.html' %
-                    s4.IP()).communicate()[0]
-            time_measures_h4.append(float(webpage_time_h4))
+            webpage_time = h2.popen('curl -o /dev/null -s -w %%{time_total} %s/http/index.html' %
+                    h1.IP()).communicate()[0]
+            time_measures.append(float(webpage_time))
         sleep(5)
         queueSize -= 10
-        switch1 = net.get('r1')
-        switch2 = net.get('r2')
+        switch1 = net.get('s0')
+        switch2 = net.get('s1')
         net.delLinkBetween(switch1, switch2)
         net.addLink(switch1, switch2, bw=args.bw_net, delay=args.delay,
                     max_queue_size=queueSize)
@@ -273,16 +268,11 @@ def bufferbloat():
     # times.  You don't need to plot them.  Just note it in your
     # README and explain.
     with open('%s/avgsd.txt'%(args.dir), 'w') as f:
-        f.write(str(time_measures_h1))
-        f.write(str(time_measures_h2))
-        f.write(str(time_measures_h3))
-        f.write(str(time_measures_h4))
+        f.write(str(time_measures))
 
     #stop_tcpprobe()
-    if qmon1 is not None:
-        qmon1.terminate()
-    if qmon2 is not None:
-        qmon2.terminate()
+    if qmon is not None:
+        qmon.terminate()
     net.stop()
     # Ensure that all processes you create within Mininet are killed.
     # Sometimes they require manual killing.
